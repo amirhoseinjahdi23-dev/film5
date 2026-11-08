@@ -1,0 +1,1213 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تماشای همزمان فیلم و چت آنلاین | CinemaSync VIP</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cinema: {
+                            950: '#07080a',
+                            900: '#0d0f14',
+                            850: '#13161f',
+                            800: '#1b202c',
+                            700: '#282f40',
+                        },
+                        amberGlow: '#ff7700',
+                        amberHot: '#ff5500',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Paho MQTT Library (Standard, unblockable Realtime Pub/Sub) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <!-- Tone.js for soft notification sound -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap');
+        * {
+            font-family: 'Vazirmatn', sans-serif;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0d0f14;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #ff7700;
+            border-radius: 999px;
+        }
+
+        /* Glow and accents */
+        .glow-orange {
+            box-shadow: 0 0 25px rgba(255, 119, 0, 0.25);
+        }
+        .gradient-orange {
+            background: linear-gradient(135deg, #ff8c00 0%, #ff5500 100%);
+        }
+        .chat-bubble-me {
+            background: linear-gradient(135deg, #ff8c00 0%, #ff5500 100%);
+            border-bottom-left-radius: 3px !important;
+        }
+        .chat-bubble-partner {
+            background: #1b202c;
+            border-bottom-right-radius: 3px !important;
+        }
+        
+        input[type="range"] {
+            accent-color: #ff7700;
+        }
+    </style>
+</head>
+<body class="bg-cinema-950 text-gray-100 min-h-screen flex flex-col select-none overflow-x-hidden">
+
+    <!-- Top Compact Header (Clean & Minimal) -->
+    <header class="bg-cinema-900 border-b border-gray-800/80 px-3 sm:px-6 py-2.5 flex items-center justify-between sticky top-0 z-40 shadow-lg">
+        <!-- Logo & Connection Status -->
+        <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-xl gradient-orange flex items-center justify-center shadow-md shadow-orange-600/30">
+                <i class="fa-solid fa-clapperboard text-black text-sm sm:text-base"></i>
+            </div>
+            <div>
+                <h1 class="text-sm sm:text-base font-black tracking-wide text-white flex items-center gap-1.5">
+                    سینما<span class="text-orange-400">سینک</span>
+                </h1>
+                <div class="flex items-center gap-1.5 text-[10px] text-gray-400">
+                    <span id="connectionBadge" class="flex items-center gap-1 text-emerald-400">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span id="connectionText">متصل</span>
+                    </span>
+                    <span class="text-gray-700">|</span>
+                    <span id="onlineCountText" class="font-bold text-orange-400">حاضرین: ۱</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Room Header Actions (Clean & Compact) -->
+        <div class="flex items-center gap-1.5 sm:gap-2">
+            <!-- Share Button -->
+            <button id="btnOpenShareModal" class="gradient-orange hover:brightness-110 text-black px-2.5 sm:px-3 py-1.5 rounded-xl font-bold text-xs shadow-md shadow-orange-600/20 transition flex items-center gap-1">
+                <i class="fa-solid fa-share-nodes text-[11px]"></i>
+                <span class="hidden sm:inline">ارسال به دوست</span>
+                <span class="sm:hidden">ارسال</span>
+            </button>
+
+            <!-- Guide Button -->
+            <button id="btnOpenGuideModal" class="bg-cinema-850 hover:bg-cinema-800 border border-gray-800 text-gray-300 w-8 h-8 rounded-xl flex items-center justify-center text-xs transition">
+                <i class="fa-solid fa-circle-question text-yellow-400"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Mobile View Tabs Switcher (Shown ONLY on mobile to keep screen uncluttered) -->
+    <div class="lg:hidden flex border-b border-gray-800 bg-cinema-900 sticky top-[53px] z-30">
+        <button id="tabBtnVideo" class="flex-1 py-2.5 text-xs font-bold text-orange-400 border-b-2 border-orange-500 flex items-center justify-center gap-1.5 transition">
+            <i class="fa-solid fa-film"></i>
+            <span>پخش فیلم</span>
+        </button>
+        <button id="tabBtnChat" class="flex-1 py-2.5 text-xs font-semibold text-gray-400 border-b-2 border-transparent flex items-center justify-center gap-1.5 transition">
+            <i class="fa-solid fa-comments"></i>
+            <span>گفت‌وگو و افراد آنلاین</span>
+            <span id="chatBadgeDot" class="w-2 h-2 rounded-full bg-orange-500 hidden"></span>
+        </button>
+    </div>
+
+    <!-- Main Content Container -->
+    <main class="flex-1 max-w-[1600px] w-full mx-auto p-2 sm:p-4 grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-5 items-start">
+        
+        <!-- Video Player Section -->
+        <section id="videoSection" class="lg:col-span-8 flex flex-col gap-2.5 w-full">
+            
+            <!-- Video Source Selection: Fast Stream & Clean Options -->
+            <div class="bg-cinema-900 border border-gray-800/90 rounded-2xl p-2.5 sm:p-3 flex flex-col gap-2 shadow-md">
+                <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+                    <!-- Option 1: Live Stream / Screen Share (Instant, No 500MB Download needed!) -->
+                    <button id="btnStartLiveStream" class="flex-1 bg-gradient-to-r from-red-600/30 to-orange-600/20 hover:from-red-600/40 border border-red-500/50 text-orange-200 font-bold text-xs px-3 sm:px-4 py-2.5 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
+                        <i class="fa-solid fa-tower-broadcast text-red-400 text-sm animate-pulse"></i>
+                        <span>پخش زنده فوری فیلم (بدون نیاز به دانلود ۵۰۰ مگ)</span>
+                    </button>
+
+                    <!-- Option 2: Select Local File (Instant Sync if both downloaded, or direct P2P) -->
+                    <div class="flex-1">
+                        <input id="localFileInput" type="file" accept="video/*" class="hidden">
+                        <label for="localFileInput" class="w-full cursor-pointer bg-cinema-850 hover:bg-cinema-800 border border-gray-700 text-gray-300 font-bold text-xs px-3 py-2.5 rounded-xl transition flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-folder-open text-orange-400 text-sm"></i>
+                            <span>انتخاب فایل فیلم از حافظه</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Direct URL Option -->
+                <div class="flex items-center gap-1.5 pt-1 border-t border-gray-800/60">
+                    <input id="videoInputUrl" type="url" placeholder="یا لینک مستقیم دانلود فیلم (سریع‌ترین حالت: https://.../movie.mp4)" dir="ltr"
+                           class="flex-1 bg-cinema-950 border border-gray-800 focus:border-orange-500 rounded-xl px-2.5 py-1.5 text-[11px] text-white placeholder-gray-500 focus:outline-none font-mono">
+                    <button id="btnLoadUrl" class="bg-cinema-800 hover:bg-cinema-700 text-orange-400 border border-gray-700 font-bold text-xs px-3 py-1.5 rounded-xl transition whitespace-nowrap">
+                        پخش لینک
+                    </button>
+                </div>
+            </div>
+
+            <!-- Video Player Box -->
+            <div class="relative bg-black rounded-2xl overflow-hidden border border-gray-800/80 shadow-2xl aspect-video flex items-center justify-center">
+                <video id="videoPlayer" class="w-full h-full object-contain" playsinline preload="metadata"></video>
+
+                <!-- Live Stream Indicator Badge -->
+                <div id="liveStreamBadge" class="absolute top-3 left-3 bg-red-600/90 text-white font-bold text-[10px] px-2 py-0.5 rounded-lg items-center gap-1.5 z-20 hidden shadow-lg animate-pulse">
+                    <span class="w-1.5 h-1.5 rounded-full bg-white"></span>
+                    <span>پخش زنده مستقیم</span>
+                </div>
+
+                <!-- Incoming / Outgoing File Transfer Live Bar -->
+                <div id="fileTransferProgressContainer" class="absolute inset-x-3 bottom-3 sm:bottom-5 sm:inset-x-8 bg-cinema-900/95 backdrop-blur-md border border-orange-500/60 p-3 rounded-2xl z-30 hidden shadow-2xl animate-fade-in">
+                    <div class="flex items-center justify-between text-xs mb-1.5 font-bold">
+                        <span id="transferStatusText" class="text-orange-400 flex items-center gap-2 text-[11px] sm:text-xs">
+                            <i class="fa-solid fa-satellite-dish animate-pulse"></i>
+                            <span>در حال همگام‌سازی مستقیم فیلم...</span>
+                        </span>
+                        <span id="transferPercentText" class="text-white font-mono text-xs">0%</span>
+                    </div>
+                    <div class="w-full bg-cinema-950 h-2 sm:h-2.5 rounded-full overflow-hidden border border-gray-800">
+                        <div id="transferProgressBar" class="h-full gradient-orange w-0 transition-all duration-150"></div>
+                    </div>
+                </div>
+
+                <!-- Empty Video Placeholder -->
+                <div id="emptyVideoPlaceholder" class="absolute inset-0 bg-cinema-950/95 flex flex-col items-center justify-center p-4 text-center z-10">
+                    <div class="w-12 h-12 sm:w-16 sm:h-16 rounded-2xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 mb-3">
+                        <i class="fa-solid fa-film text-xl sm:text-2xl"></i>
+                    </div>
+                    <h3 class="text-sm sm:text-base font-bold text-white mb-1.5">فیلمی انتخاب نشده است</h3>
+                    <p class="text-[11px] sm:text-xs text-gray-400 max-w-sm leading-relaxed mb-3">
+                        سریع‌ترین روش: دکمه قرمز <b>«پخش زنده فوری»</b> را بزنید تا تصویر فیلم مستقیماً و بدون معطلی روی گوشی دوستتان لایو شود!
+                    </p>
+                </div>
+
+                <!-- Floating Sync Notification Toast -->
+                <div id="syncToast" class="absolute top-3 right-3 bg-black/90 backdrop-blur-md border border-orange-500/50 text-orange-400 px-3 py-1 rounded-xl text-[11px] flex items-center gap-1.5 z-30 opacity-0 pointer-events-none transition-all duration-300">
+                    <i class="fa-solid fa-arrows-rotate animate-spin text-[10px]"></i>
+                    <span id="syncToastText">همگام‌سازی...</span>
+                </div>
+            </div>
+
+            <!-- Custom Clean Controls Bar -->
+            <div class="bg-cinema-900 border border-gray-800/90 rounded-2xl p-2.5 sm:p-3 shadow-lg flex flex-col gap-2">
+                <!-- Seek Bar -->
+                <div class="flex items-center gap-2">
+                    <span id="timeDisplay" class="text-[11px] font-mono text-gray-400 min-w-[36px] text-left">00:00</span>
+                    <input id="videoSeekbar" type="range" min="0" max="100" value="0" step="0.1" 
+                           class="flex-1 h-1.5 bg-gray-800 rounded-lg cursor-pointer">
+                    <span id="durationDisplay" class="text-[11px] font-mono text-gray-500 min-w-[36px] text-right">00:00</span>
+                </div>
+
+                <!-- Buttons & Actions Row -->
+                <div class="flex items-center justify-between flex-wrap gap-2">
+                    <div class="flex items-center gap-2">
+                        <!-- Play/Pause -->
+                        <button id="btnPlayPause" class="gradient-orange hover:brightness-110 text-black w-9 h-9 rounded-xl flex items-center justify-center font-bold shadow-md shadow-orange-600/30 transition">
+                            <i id="playPauseIcon" class="fa-solid fa-play text-xs"></i>
+                        </button>
+
+                        <!-- Rewind 10s -->
+                        <button id="btnRewind" title="۱۰ ثانیه عقب" class="bg-cinema-850 hover:bg-cinema-800 text-gray-300 w-8 h-8 rounded-xl flex items-center justify-center border border-gray-800 transition text-xs">
+                            <i class="fa-solid fa-rotate-left"></i>
+                        </button>
+
+                        <!-- Forward 10s -->
+                        <button id="btnForward" title="۱۰ ثانیه جلو" class="bg-cinema-850 hover:bg-cinema-800 text-gray-300 w-8 h-8 rounded-xl flex items-center justify-center border border-gray-800 transition text-xs">
+                            <i class="fa-solid fa-rotate-right"></i>
+                        </button>
+
+                        <!-- Force Re-sync Button -->
+                        <button id="btnForceSync" class="bg-cinema-850 hover:bg-cinema-800 text-orange-400 border border-orange-500/30 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold flex items-center gap-1 transition">
+                            <i class="fa-solid fa-arrows-rotate text-[10px]"></i>
+                            <span>همگام‌سازی</span>
+                        </button>
+                    </div>
+
+                    <!-- Right Controls: Speed and Filename -->
+                    <div class="flex items-center gap-2 text-xs">
+                        <select id="playbackSpeedSelect" class="bg-cinema-950 border border-gray-800 rounded-lg px-1.5 py-1 text-[11px] text-orange-400 focus:outline-none">
+                            <option value="0.75">0.75x</option>
+                            <option value="1" selected>1.0x</option>
+                            <option value="1.25">1.25x</option>
+                            <option value="1.5">1.5x</option>
+                        </select>
+                        <span id="currentVideoTitle" class="text-[11px] text-gray-500 truncate max-w-[120px]">بدون فایل</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Live Chat & Online Users Section -->
+        <section id="chatSection" class="hidden lg:flex lg:col-span-4 bg-cinema-900 border border-gray-800/90 rounded-2xl flex-col h-[480px] lg:h-[580px] shadow-xl overflow-hidden w-full">
+            <!-- Chat Header -->
+            <div class="bg-cinema-850/90 border-b border-gray-800 px-3.5 py-2 flex flex-col gap-1.5">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span>گفت‌وگو</span>
+                    </h2>
+                    <span id="userBadge" class="text-[11px] text-orange-400 font-semibold truncate max-w-[120px]">کاربر VIP</span>
+                </div>
+
+                <!-- Online Presence Strip -->
+                <div id="onlineUsersContainer" class="flex items-center gap-1.5 flex-wrap pt-0.5">
+                    <span class="bg-orange-500/15 text-orange-400 border border-orange-500/30 px-2 py-0.5 rounded-lg text-[10px] font-bold">
+                        شما (آنلاین)
+                    </span>
+                </div>
+            </div>
+
+            <!-- Messages List Box -->
+            <div id="chatMessages" class="flex-1 p-3 overflow-y-auto space-y-2.5 flex flex-col text-xs">
+                <div class="bg-cinema-950/80 border border-gray-800 text-gray-400 p-2.5 rounded-xl text-center text-[11px] leading-relaxed">
+                    اتاق اختصاصی آماده است. هر پیامی بفرستید همزمان منتقل می‌شود.
+                </div>
+            </div>
+
+            <!-- Chat Input Box -->
+            <form id="chatForm" class="p-2.5 bg-cinema-950 border-t border-gray-800/80 flex items-center gap-2">
+                <input id="chatInput" type="text" placeholder="پیام..." autocomplete="off"
+                       class="flex-1 bg-cinema-900 border border-gray-800 focus:border-orange-500 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none transition">
+                <button type="submit" class="gradient-orange hover:brightness-110 text-black font-bold w-9 h-9 rounded-xl flex items-center justify-center transition shadow-md">
+                    <i class="fa-solid fa-paper-plane text-xs transform -rotate-45"></i>
+                </button>
+            </form>
+        </section>
+    </main>
+
+    <!-- Footer Security Information -->
+    <footer class="bg-cinema-900 border-t border-gray-800/80 px-3 py-2 text-center text-[10px] text-gray-500 mt-auto flex items-center justify-between max-w-[1600px] w-full mx-auto">
+        <div class="flex items-center gap-1.5 truncate">
+            <i class="fa-solid fa-lock text-orange-400"></i>
+            <span class="truncate">اتاق: <span id="roomCodeDisplay" class="text-orange-300 font-mono font-bold">CINEMA-VIP</span></span>
+        </div>
+        <button id="btnLogout" class="text-gray-500 hover:text-red-400 transition underline">خروج</button>
+    </footer>
+
+    <!-- Security Gate Modal (Login) -->
+    <div id="authGateModal" class="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center p-3 z-50">
+        <div class="bg-cinema-900 border border-orange-500/40 rounded-3xl p-5 sm:p-7 max-w-sm w-full shadow-2xl relative glow-orange">
+            <div class="text-center mb-5">
+                <div class="w-12 h-12 rounded-2xl gradient-orange flex items-center justify-center mx-auto mb-2 text-black shadow-lg">
+                    <i class="fa-solid fa-film text-xl"></i>
+                </div>
+                <h2 class="text-lg font-black text-white">ورود به سینماسینک</h2>
+                <p class="text-[11px] text-gray-400 mt-0.5">تماشای همزمان فیلم و چت دو نفره</p>
+            </div>
+
+            <form id="authLoginForm" class="space-y-3">
+                <div>
+                    <label class="block text-[11px] font-semibold text-gray-300 mb-1">ایمیل مجاز:</label>
+                    <input id="authEmailInput" type="email" required dir="ltr"
+                           value="amirhoseinjahdi92@gmail.com" readonly
+                           class="w-full bg-cinema-950 border border-gray-800 rounded-xl px-3 py-2 text-xs text-orange-300 font-mono cursor-not-allowed">
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-gray-300 mb-1">رمز عبور:</label>
+                    <input id="authPasswordInput" type="password" required placeholder="رمز عبور" dir="ltr"
+                           class="w-full bg-cinema-950 border border-gray-800 focus:border-orange-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition font-mono">
+                </div>
+
+                <div>
+                    <label class="block text-[11px] font-semibold text-gray-300 mb-1">نام شما:</label>
+                    <input id="authNameInput" type="text" required placeholder="مثلاً: امیرحسین یا مرضیه"
+                           class="w-full bg-cinema-950 border border-gray-800 focus:border-orange-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none transition">
+                </div>
+
+                <div id="authErrorMsg" class="hidden text-[11px] text-red-400 bg-red-950/40 border border-red-800/60 p-2 rounded-xl text-center"></div>
+
+                <button type="submit" class="w-full gradient-orange hover:brightness-110 text-black font-extrabold py-2.5 rounded-xl transition shadow-lg text-xs mt-1">
+                    ورود به اتاق
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Share Room Modal -->
+    <div id="shareModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 z-50 hidden">
+        <div class="bg-cinema-900 border border-gray-800 rounded-3xl p-5 max-w-sm w-full shadow-2xl relative">
+            <button id="btnCloseShareModal" class="absolute top-3 left-3 text-gray-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-base"></i>
+            </button>
+            <div class="text-center mb-4">
+                <h3 class="text-sm font-bold text-white">ارسال لینک به دوست</h3>
+                <p class="text-[11px] text-gray-400 mt-0.5">دوستتان با کلیک روی لینک مستقیم وارد این اتاق می‌شود.</p>
+            </div>
+
+            <div class="space-y-3">
+                <div class="flex items-center gap-1.5">
+                    <input id="shareUrlInput" type="text" readonly dir="ltr"
+                           class="flex-1 bg-cinema-950 border border-gray-800 rounded-xl px-2.5 py-2 text-xs text-orange-300 font-mono">
+                    <button id="btnModalCopyLink" class="bg-cinema-850 hover:bg-cinema-800 border border-gray-700 text-white px-3 py-2 rounded-xl text-xs font-semibold">
+                        کپی
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <a id="shareTelegramBtn" target="_blank" class="bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-400 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5">
+                        <i class="fa-brands fa-telegram"></i>
+                        <span>تلگرام</span>
+                    </a>
+                    <a id="shareWhatsappBtn" target="_blank" class="bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-400 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5">
+                        <i class="fa-brands fa-whatsapp"></i>
+                        <span>واتساپ</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Guide Modal -->
+    <div id="guideModal" class="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 z-50 hidden">
+        <div class="bg-cinema-900 border border-gray-800 rounded-3xl p-5 max-w-sm w-full shadow-2xl relative text-xs leading-relaxed">
+            <button id="btnCloseGuideModal" class="absolute top-3 left-3 text-gray-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-base"></i>
+            </button>
+            <h3 class="text-sm font-bold text-white mb-2.5 flex items-center gap-1.5">
+                <i class="fa-solid fa-circle-question text-orange-400"></i>
+                <span>نحوه تماشای همزمان</span>
+            </h3>
+            <div class="space-y-2 text-gray-300">
+                <div class="bg-cinema-950 p-2.5 rounded-xl border border-gray-800">
+                    <b class="text-orange-400 block mb-1">فقط یک نفر فیلم را انتخاب کند:</b>
+                    شما یا دوستتان دکمه «انتخاب فیلم از گوشی یا سیستم» را می‌زنید. فیلم به صورت خودکار و بدون نیاز به انتخاب مجدد به گوشی طرف مقابل ارسال و شروع به پخش می‌شود.
+                </div>
+                <div class="bg-cinema-950 p-2.5 rounded-xl border border-gray-800">
+                    <b class="text-orange-400 block mb-1">همگام بودن استپ و پلی:</b>
+                    هر کسی فیلم را متوقف کند، جلو یا عقب بزند، دقیقاً همان ثانیه برای طرف مقابل اعمال می‌شود.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Script -->
+    <script>
+        // State
+        let currentUserId = 'usr_' + Math.floor(Math.random() * 1000000);
+        let currentUserName = 'کاربر ' + Math.floor(Math.random() * 900 + 100);
+        let currentUserEmail = '';
+        let isAuthenticated = false;
+        
+        const SINGLE_ALLOWED_EMAIL = 'amirhoseinjahdi92@gmail.com';
+        const REQUIRED_PASSWORD = 'Marziye';
+
+        let currentRoomId = 'CINEMA-VIP';
+        let broadcastChannel = null;
+        let mqttClient = null;
+        let activeUsersMap = new Map();
+        let presenceInterval = null;
+        let isSyncingFromRemote = false;
+        let synth = null;
+
+        // P2P WebRTC DataChannel & MediaStream State
+        let peerConnection = null;
+        let dataChannel = null;
+        let localStream = null;
+        let isBroadcastingLive = false;
+        let receivedFileChunks = [];
+        let incomingFileInfo = null;
+        let receivedBytes = 0;
+        const CHUNK_SIZE = 128 * 1024; // 128KB chunks for faster throughput
+
+        // UI references
+        const videoPlayer = document.getElementById('videoPlayer');
+        const emptyVideoPlaceholder = document.getElementById('emptyVideoPlaceholder');
+        const liveStreamBadge = document.getElementById('liveStreamBadge');
+        const btnStartLiveStream = document.getElementById('btnStartLiveStream');
+        const fileTransferProgressContainer = document.getElementById('fileTransferProgressContainer');
+        const transferStatusText = document.getElementById('transferStatusText');
+        const transferPercentText = document.getElementById('transferPercentText');
+        const transferProgressBar = document.getElementById('transferProgressBar');
+        const videoInputUrl = document.getElementById('videoInputUrl');
+        const btnLoadUrl = document.getElementById('btnLoadUrl');
+        const localFileInput = document.getElementById('localFileInput');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const chatForm = document.getElementById('chatForm');
+        const syncToast = document.getElementById('syncToast');
+        const syncToastText = document.getElementById('syncToastText');
+        const connectionBadge = document.getElementById('connectionBadge');
+        const connectionText = document.getElementById('connectionText');
+        const userBadge = document.getElementById('userBadge');
+        const roomCodeDisplay = document.getElementById('roomCodeDisplay');
+        const currentVideoTitle = document.getElementById('currentVideoTitle');
+        const onlineCountText = document.getElementById('onlineCountText');
+        const onlineUsersContainer = document.getElementById('onlineUsersContainer');
+
+        // Mobile Tabs
+        const tabBtnVideo = document.getElementById('tabBtnVideo');
+        const tabBtnChat = document.getElementById('tabBtnChat');
+        const videoSection = document.getElementById('videoSection');
+        const chatSection = document.getElementById('chatSection');
+        const chatBadgeDot = document.getElementById('chatBadgeDot');
+
+        // Security Elements
+        const authGateModal = document.getElementById('authGateModal');
+        const authLoginForm = document.getElementById('authLoginForm');
+        const authEmailInput = document.getElementById('authEmailInput');
+        const authPasswordInput = document.getElementById('authPasswordInput');
+        const authNameInput = document.getElementById('authNameInput');
+        const authErrorMsg = document.getElementById('authErrorMsg');
+        const btnLogout = document.getElementById('btnLogout');
+
+        // Modals
+        const shareModal = document.getElementById('shareModal');
+        const btnOpenShareModal = document.getElementById('btnOpenShareModal');
+        const btnCloseShareModal = document.getElementById('btnCloseShareModal');
+        const shareUrlInput = document.getElementById('shareUrlInput');
+        const btnModalCopyLink = document.getElementById('btnModalCopyLink');
+        const shareTelegramBtn = document.getElementById('shareTelegramBtn');
+        const shareWhatsappBtn = document.getElementById('shareWhatsappBtn');
+
+        const guideModal = document.getElementById('guideModal');
+        const btnOpenGuideModal = document.getElementById('btnOpenGuideModal');
+        const btnCloseGuideModal = document.getElementById('btnCloseGuideModal');
+
+        // Player Controls
+        const btnPlayPause = document.getElementById('btnPlayPause');
+        const playPauseIcon = document.getElementById('playPauseIcon');
+        const btnRewind = document.getElementById('btnRewind');
+        const btnForward = document.getElementById('btnForward');
+        const btnForceSync = document.getElementById('btnForceSync');
+        const videoSeekbar = document.getElementById('videoSeekbar');
+        const timeDisplay = document.getElementById('timeDisplay');
+        const durationDisplay = document.getElementById('durationDisplay');
+        const playbackSpeedSelect = document.getElementById('playbackSpeedSelect');
+
+        // Mobile View Switching
+        tabBtnVideo?.addEventListener('click', () => {
+            videoSection.classList.remove('hidden');
+            chatSection.classList.add('hidden');
+            tabBtnVideo.className = "flex-1 py-2.5 text-xs font-bold text-orange-400 border-b-2 border-orange-500 flex items-center justify-center gap-1.5 transition";
+            tabBtnChat.className = "flex-1 py-2.5 text-xs font-semibold text-gray-400 border-b-2 border-transparent flex items-center justify-center gap-1.5 transition";
+        });
+
+        tabBtnChat?.addEventListener('click', () => {
+            videoSection.classList.add('hidden');
+            chatSection.classList.remove('hidden');
+            chatBadgeDot.classList.add('hidden');
+            tabBtnChat.className = "flex-1 py-2.5 text-xs font-bold text-orange-400 border-b-2 border-orange-500 flex items-center justify-center gap-1.5 transition";
+            tabBtnVideo.className = "flex-1 py-2.5 text-xs font-semibold text-gray-400 border-b-2 border-transparent flex items-center justify-center gap-1.5 transition";
+        });
+
+        function updateShareLinks() {
+            const shareUrl = `${window.location.origin}${window.location.pathname}?room=${currentRoomId}`;
+            if (shareUrlInput) shareUrlInput.value = shareUrl;
+            const textMessage = encodeURIComponent(`سلام! بیا با هم تو سینماسینک فیلم ببینیم:\n${shareUrl}`);
+            if (shareTelegramBtn) shareTelegramBtn.href = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${textMessage}`;
+            if (shareWhatsappBtn) shareWhatsappBtn.href = `https://api.whatsapp.com/send?text=${textMessage}`;
+        }
+
+        function initRoomIdentity() {
+            const params = new URLSearchParams(window.location.search);
+            const queryRoom = params.get('room');
+            if (queryRoom && queryRoom.trim() !== '') {
+                currentRoomId = queryRoom.trim().toUpperCase();
+            }
+            if (roomCodeDisplay) roomCodeDisplay.textContent = currentRoomId;
+            updateShareLinks();
+        }
+
+        // --- REALTIME MQTT SIGNALING ENGINE ---
+        function setupRealtimeConnection() {
+            try {
+                if (window.BroadcastChannel) {
+                    if (broadcastChannel) broadcastChannel.close();
+                    broadcastChannel = new BroadcastChannel(`sync_room_${currentRoomId}`);
+                    broadcastChannel.onmessage = (event) => handleIncomingData(event.data);
+                }
+            } catch (e) {}
+
+            updateConnectionStatus('connecting', 'در حال اتصال...');
+
+            const clientId = `vip_${currentUserId}_${Math.floor(Math.random() * 1000)}`;
+            const topic = `cinemasync/vip/rooms/${currentRoomId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+
+            try {
+                if (mqttClient) {
+                    try { mqttClient.disconnect(); } catch(e){}
+                }
+
+                mqttClient = new Paho.MQTT.Client("broker.emqx.io", Number(8084), "/mqtt", clientId);
+
+                mqttClient.onConnectionLost = () => {
+                    updateConnectionStatus('connecting', 'تلاش برای اتصال...');
+                    setTimeout(() => { if (isAuthenticated) setupRealtimeConnection(); }, 3000);
+                };
+
+                mqttClient.onMessageArrived = (message) => {
+                    try {
+                        const payload = JSON.parse(message.payloadString);
+                        if (payload && payload.senderId !== currentUserId) {
+                            handleIncomingData(payload);
+                        }
+                    } catch(err){}
+                };
+
+                mqttClient.connect({
+                    useSSL: true,
+                    timeout: 8,
+                    keepAliveInterval: 20,
+                    cleanSession: true,
+                    onSuccess: () => {
+                        updateConnectionStatus('active', 'آنلاین و همگام');
+                        mqttClient.subscribe(topic, { qos: 1 });
+                        sendPacket({ type: 'presence_ping', name: currentUserName });
+                        initWebRTCConnection();
+                    },
+                    onFailure: () => {
+                        updateConnectionStatus('active', 'متصل (رله محلی)');
+                    }
+                });
+            } catch(e){}
+
+            if (presenceInterval) clearInterval(presenceInterval);
+            presenceInterval = setInterval(() => {
+                if (isAuthenticated) {
+                    sendPacket({ type: 'presence_ping', name: currentUserName });
+                    cleanExpiredOnlineUsers();
+                }
+            }, 3000);
+        }
+
+        // --- INSTANT LIVE STREAMING (ZERO WAIT FOR 500MB+ VIDEOS) ---
+        // Streams the video playback directly without uploading/downloading full file!
+        async function startInstantLiveStream() {
+            try {
+                // If browser supports captureStream from video element
+                let stream = null;
+                if (videoPlayer.captureStream) {
+                    stream = videoPlayer.captureStream();
+                } else if (videoPlayer.mozCaptureStream) {
+                    stream = videoPlayer.mozCaptureStream();
+                } else if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+                    // Screen/Tab sharing option as ultra-fast fallback
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: { cursor: "always" },
+                        audio: true
+                    });
+                }
+
+                if (!stream || stream.getTracks().length === 0) {
+                    // If no video is selected yet, prompt user to select file first
+                    localFileInput.click();
+                    showSyncToast('ابتدا فیلم را انتخاب کنید تا لایو استریم شود');
+                    return;
+                }
+
+                localStream = stream;
+                isBroadcastingLive = true;
+                liveStreamBadge.classList.remove('hidden');
+                liveStreamBadge.classList.add('flex');
+
+                if (!peerConnection) initWebRTCConnection();
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                createP2POffer();
+
+                sendPacket({
+                    type: 'chat_message',
+                    text: `پخش زنده آنی فیلم را شروع کردم! بدون نیاز به صبر برای دانلود فیلم...`,
+                    time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
+                });
+
+                showSyncToast('پخش زنده مستقیم فعال شد (بدون معطلی دانلود)');
+            } catch (err) {
+                console.error("Live Stream Error:", err);
+                showSyncToast('خطا در شروع استریم زنده: ' + (err.message || ''));
+            }
+        }
+
+        btnStartLiveStream?.addEventListener('click', () => {
+            if (!videoPlayer.src && videoPlayer.children.length === 0) {
+                // Click file input first
+                localFileInput.click();
+            } else {
+                startInstantLiveStream();
+            }
+        });
+
+        // --- DIRECT P2P WEBRTC DATACHANNEL FILE TRANSFER & STREAMING ENGINE ---
+        function initWebRTCConnection() {
+            try {
+                const config = {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                };
+
+                peerConnection = new RTCPeerConnection(config);
+
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        sendPacket({ type: 'webrtc_candidate', candidate: event.candidate });
+                    }
+                };
+
+                // Handle incoming live video/audio stream
+                peerConnection.ontrack = (event) => {
+                    if (event.streams && event.streams[0]) {
+                        videoPlayer.srcObject = event.streams[0];
+                        videoPlayer.play().catch(() => {});
+                        emptyVideoPlaceholder.classList.add('hidden');
+                        liveStreamBadge.classList.remove('hidden');
+                        liveStreamBadge.classList.add('flex');
+                        currentVideoTitle.textContent = 'پخش زنده دریافتی';
+                        showSyncToast('در حال دریافت استریم زنده ویدیو...');
+                    }
+                };
+
+                peerConnection.ondatachannel = (event) => {
+                    setupDataChannelHandlers(event.channel);
+                };
+            } catch(e){
+                console.error('WebRTC Init Error:', e);
+            }
+        }
+
+        function createP2POffer() {
+            if (!peerConnection) initWebRTCConnection();
+            dataChannel = peerConnection.createDataChannel('fileTransfer', { ordered: true });
+            setupDataChannelHandlers(dataChannel);
+
+            peerConnection.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+            }).then(offer => {
+                return peerConnection.setLocalDescription(offer);
+            }).then(() => {
+                sendPacket({ type: 'webrtc_offer', offer: peerConnection.localDescription });
+            }).catch(e => console.error(e));
+        }
+
+        function setupDataChannelHandlers(dc) {
+            dataChannel = dc;
+            dataChannel.binaryType = 'arraybuffer';
+
+            dataChannel.onopen = () => {
+                console.log('P2P DataChannel open');
+            };
+
+            dataChannel.onmessage = (event) => {
+                const data = event.data;
+                if (typeof data === 'string') {
+                    const parsed = JSON.parse(data);
+                    if (parsed.type === 'file_header') {
+                        incomingFileInfo = parsed;
+                        receivedFileChunks = [];
+                        receivedBytes = 0;
+                        fileTransferProgressContainer.classList.remove('hidden');
+                        transferStatusText.innerHTML = `<i class="fa-solid fa-cloud-arrow-down animate-bounce"></i> <span>دریافت «${escapeHtml(parsed.name)}»...</span>`;
+                        showSyncToast(`${parsed.senderName} فیلم را ارسال کرد...`);
+                    } else if (parsed.type === 'file_complete') {
+                        const blob = new Blob(receivedFileChunks, { type: incomingFileInfo.mimeType || 'video/mp4' });
+                        const objectUrl = URL.createObjectURL(blob);
+                        videoPlayer.srcObject = null;
+                        videoPlayer.src = objectUrl;
+                        videoPlayer.load();
+                        emptyVideoPlaceholder.classList.add('hidden');
+                        currentVideoTitle.textContent = incomingFileInfo.name;
+                        fileTransferProgressContainer.classList.add('hidden');
+                        showSyncToast(`فیلم با موفقیت دریافت و آماده پخش شد!`);
+                        
+                        if (window.innerWidth < 1024 && tabBtnVideo) {
+                            tabBtnVideo.click();
+                        }
+                    }
+                } else if (data instanceof ArrayBuffer) {
+                    receivedFileChunks.push(data);
+                    receivedBytes += data.byteLength;
+                    if (incomingFileInfo && incomingFileInfo.size > 0) {
+                        const pct = Math.min(100, Math.round((receivedBytes / incomingFileInfo.size) * 100));
+                        transferPercentText.textContent = `${pct}%`;
+                        transferProgressBar.style.width = `${pct}%`;
+                    }
+                }
+            };
+        }
+
+        // Stream File to Partner in chunks
+        function streamFileToPartner(file) {
+            showSyncToast(`در حال آماده‌سازی «${file.name}»...`);
+            fileTransferProgressContainer.classList.remove('hidden');
+            transferStatusText.innerHTML = `<i class="fa-solid fa-paper-plane animate-pulse"></i> <span>در حال ارسال فیلم «${escapeHtml(file.name)}» به پارتنر...</span>`;
+
+            sendPacket({
+                type: 'chat_message',
+                text: `فیلم «${file.name}» را انتخاب کردم. اگر شما هم این فایل را دارید دکمه فایل را بزنید تا در ۱ ثانیه ست شود!`,
+                time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
+            });
+
+            if (!dataChannel || dataChannel.readyState !== 'open') {
+                createP2POffer();
+                const checkReady = setInterval(() => {
+                    if (dataChannel && dataChannel.readyState === 'open') {
+                        clearInterval(checkReady);
+                        sendFileChunks(file);
+                    }
+                }, 500);
+            } else {
+                sendFileChunks(file);
+            }
+        }
+
+        function sendFileChunks(file) {
+            dataChannel.send(JSON.stringify({
+                type: 'file_header',
+                name: file.name,
+                size: file.size,
+                mimeType: file.type,
+                senderName: currentUserName
+            }));
+
+            let offset = 0;
+            const reader = new FileReader();
+
+            function readSlice() {
+                if (offset < file.size) {
+                    const slice = file.slice(offset, offset + CHUNK_SIZE);
+                    reader.readAsArrayBuffer(slice);
+                } else {
+                    dataChannel.send(JSON.stringify({ type: 'file_complete' }));
+                    fileTransferProgressContainer.classList.add('hidden');
+                    showSyncToast('فیلم با موفقیت به دستگاه همراه منتقل شد!');
+                }
+            }
+
+            reader.onload = (e) => {
+                if (dataChannel.bufferedAmount > 4 * 1024 * 1024) {
+                    setTimeout(() => {
+                        dataChannel.send(e.target.result);
+                        offset += e.target.result.byteLength;
+                        updateSendProgress(offset, file.size);
+                        readSlice();
+                    }, 40);
+                } else {
+                    dataChannel.send(e.target.result);
+                    offset += e.target.result.byteLength;
+                    updateSendProgress(offset, file.size);
+                    readSlice();
+                }
+            };
+
+            readSlice();
+        }
+
+        function updateSendProgress(sent, total) {
+            const pct = Math.min(100, Math.round((sent / total) * 100));
+            transferPercentText.textContent = `${pct}%`;
+            transferProgressBar.style.width = `${pct}%`;
+        }
+
+        // Handle Incoming WebRTC Signaling and MQTT events
+        function handleIncomingData(data) {
+            if (!data) return;
+
+            if (data.senderEmail && data.senderEmail.toLowerCase() !== SINGLE_ALLOWED_EMAIL.toLowerCase()) {
+                return;
+            }
+
+            if (data.senderId && data.senderName) {
+                activeUsersMap.set(data.senderId, {
+                    name: data.senderName,
+                    lastSeen: Date.now()
+                });
+                renderOnlineUsers();
+            }
+
+            if (data.type === 'video_sync') {
+                applyVideoState(data);
+            } else if (data.type === 'chat_message') {
+                renderChatMessage(data.senderName, data.text, false, data.time);
+                playMessageSound();
+                if (window.innerWidth < 1024 && chatSection.classList.contains('hidden')) {
+                    chatBadgeDot.classList.remove('hidden');
+                }
+            } else if (data.type === 'webrtc_offer') {
+                handleWebRTCOffer(data.offer);
+            } else if (data.type === 'webrtc_answer') {
+                handleWebRTCAnswer(data.answer);
+            } else if (data.type === 'webrtc_candidate') {
+                if (peerConnection) {
+                    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.error(e));
+                }
+            }
+        }
+
+        function handleWebRTCOffer(offer) {
+            if (!peerConnection) initWebRTCConnection();
+            peerConnection.setRemoteDescription(new RTCSessionDescription(offer))
+                .then(() => peerConnection.createAnswer())
+                .then(answer => peerConnection.setLocalDescription(answer))
+                .then(() => {
+                    sendPacket({ type: 'webrtc_answer', answer: peerConnection.localDescription });
+                }).catch(e => console.error(e));
+        }
+
+        function handleWebRTCAnswer(answer) {
+            if (peerConnection) {
+                peerConnection.setRemoteDescription(new RTCSessionDescription(answer)).catch(e => console.error(e));
+            }
+        }
+
+        // Online Users Management
+        function cleanExpiredOnlineUsers() {
+            const now = Date.now();
+            let changed = false;
+            activeUsersMap.forEach((user, id) => {
+                if (now - user.lastSeen > 8000) {
+                    activeUsersMap.delete(id);
+                    changed = true;
+                }
+            });
+            if (changed) renderOnlineUsers();
+        }
+
+        function renderOnlineUsers() {
+            const total = 1 + activeUsersMap.size;
+            if (onlineCountText) onlineCountText.textContent = `حاضرین: ${total}`;
+
+            let html = `
+                <span class="bg-orange-500/15 text-orange-400 border border-orange-500/30 px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>${escapeHtml(currentUserName)} (شما)</span>
+                </span>
+            `;
+
+            activeUsersMap.forEach((user) => {
+                html += `
+                    <span class="bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        <span>${escapeHtml(user.name)}</span>
+                    </span>
+                `;
+            });
+
+            if (onlineUsersContainer) onlineUsersContainer.innerHTML = html;
+        }
+
+        function broadcastCurrentState(action = 'update') {
+            if (!isAuthenticated) return;
+            const payload = {
+                type: 'video_sync',
+                isPlaying: !videoPlayer.paused,
+                currentTime: videoPlayer.currentTime,
+                playbackRate: videoPlayer.playbackRate,
+                videoSrc: videoPlayer.src.startsWith('blob:') ? '' : videoPlayer.src,
+                action: action,
+                actorName: currentUserName,
+            };
+            sendPacket(payload);
+        }
+
+        function applyVideoState(data) {
+            isSyncingFromRemote = true;
+
+            if (data.videoSrc && data.videoSrc.startsWith('http') && videoPlayer.src !== data.videoSrc) {
+                videoPlayer.src = data.videoSrc;
+                videoPlayer.load();
+                emptyVideoPlaceholder.classList.add('hidden');
+                currentVideoTitle.textContent = 'ویدیوی بارگذاری‌شده';
+                showSyncToast(`${data.actorName} ویدیو را تنظیم کرد`);
+            }
+
+            if (Math.abs(videoPlayer.currentTime - data.currentTime) > 1.2) {
+                videoPlayer.currentTime = data.currentTime;
+            }
+
+            if (data.playbackRate && videoPlayer.playbackRate !== data.playbackRate) {
+                videoPlayer.playbackRate = data.playbackRate;
+                playbackSpeedSelect.value = data.playbackRate;
+            }
+
+            if (data.isPlaying && videoPlayer.paused) {
+                videoPlayer.play().catch(() => {});
+                playPauseIcon.className = 'fa-solid fa-pause';
+                showSyncToast(`${data.actorName} فیلم را پخش کرد`);
+            } else if (!data.isPlaying && !videoPlayer.paused) {
+                videoPlayer.pause();
+                playPauseIcon.className = 'fa-solid fa-play';
+                showSyncToast(`${data.actorName} فیلم را متوقف کرد`);
+            }
+
+            setTimeout(() => { isSyncingFromRemote = false; }, 600);
+        }
+
+        // Login Handler
+        authLoginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const inputEmail = authEmailInput.value.trim().toLowerCase();
+            const inputPassword = authPasswordInput.value.trim();
+            const inputName = authNameInput.value.trim();
+
+            if (inputEmail !== SINGLE_ALLOWED_EMAIL.toLowerCase() || inputPassword !== REQUIRED_PASSWORD) {
+                authErrorMsg.classList.remove('hidden');
+                authErrorMsg.textContent = 'رمز عبور اشتباه است! رمز: Marziye';
+                return;
+            }
+
+            authErrorMsg.classList.add('hidden');
+            currentUserEmail = inputEmail;
+            currentUserName = inputName || 'کاربر VIP';
+            isAuthenticated = true;
+            userBadge.textContent = currentUserName;
+
+            sessionStorage.setItem('watchparty_user_name', currentUserName);
+            authGateModal.classList.add('hidden');
+            showSyncToast(`خوش آمدید ${currentUserName}`);
+            setupRealtimeConnection();
+            renderOnlineUsers();
+        });
+
+        btnLogout.addEventListener('click', () => {
+            sessionStorage.clear();
+            window.location.reload();
+        });
+
+        // Video Player Handlers
+        videoPlayer.addEventListener('play', () => {
+            playPauseIcon.className = 'fa-solid fa-pause';
+            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('play');
+        });
+
+        videoPlayer.addEventListener('pause', () => {
+            playPauseIcon.className = 'fa-solid fa-play';
+            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('pause');
+        });
+
+        videoPlayer.addEventListener('seeked', () => {
+            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('seek');
+        });
+
+        videoPlayer.addEventListener('timeupdate', () => {
+            const current = videoPlayer.currentTime;
+            const duration = videoPlayer.duration || 0;
+            timeDisplay.textContent = formatTime(current);
+            if (!isNaN(duration) && duration > 0) {
+                durationDisplay.textContent = formatTime(duration);
+                videoSeekbar.value = (current / duration) * 100;
+            }
+        });
+
+        videoSeekbar.addEventListener('input', () => {
+            const duration = videoPlayer.duration || 0;
+            if (duration > 0) {
+                videoPlayer.currentTime = (videoSeekbar.value / 100) * duration;
+                if (isAuthenticated) broadcastCurrentState('seek');
+            }
+        });
+
+        btnPlayPause.addEventListener('click', () => {
+            if (!videoPlayer.src && videoPlayer.children.length === 0) {
+                showSyncToast('ابتدا فیلم را انتخاب کنید');
+                return;
+            }
+            if (videoPlayer.paused) {
+                videoPlayer.play();
+            } else {
+                videoPlayer.pause();
+            }
+        });
+
+        btnRewind.addEventListener('click', () => {
+            videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 10);
+            if (isAuthenticated) broadcastCurrentState('seek');
+        });
+
+        btnForward.addEventListener('click', () => {
+            videoPlayer.currentTime = Math.min(videoPlayer.duration || 0, videoPlayer.currentTime + 10);
+            if (isAuthenticated) broadcastCurrentState('seek');
+        });
+
+        btnForceSync.addEventListener('click', () => {
+            broadcastCurrentState('force_sync');
+            showSyncToast('همگام‌سازی ثانیه انجام شد');
+        });
+
+        playbackSpeedSelect.addEventListener('change', (e) => {
+            videoPlayer.playbackRate = parseFloat(e.target.value);
+            if (isAuthenticated) broadcastCurrentState('rate');
+        });
+
+        // Load URL
+        btnLoadUrl.addEventListener('click', () => {
+            const url = videoInputUrl.value.trim();
+            if (!url) {
+                showSyncToast('آدرس ویدیو را وارد کنید');
+                return;
+            }
+            videoPlayer.src = url;
+            videoPlayer.load();
+            emptyVideoPlaceholder.classList.add('hidden');
+            currentVideoTitle.textContent = url.split('/').pop().split('?')[0] || 'ویدیوی آنلاین';
+            if (isAuthenticated) broadcastCurrentState('load_url');
+        });
+
+        // Send Packet Helper (MQTT + BroadcastChannel Relay)
+        function sendPacket(data) {
+            const enriched = {
+                ...data,
+                senderId: currentUserId,
+                senderName: currentUserName,
+                senderEmail: currentUserEmail,
+                roomId: currentRoomId,
+                timestamp: Date.now()
+            };
+
+            try {
+                if (broadcastChannel) {
+                    broadcastChannel.postMessage(enriched);
+                }
+            } catch (e) {}
+
+            try {
+                if (mqttClient && mqttClient.isConnected()) {
+                    const topic = `cinemasync/vip/rooms/${currentRoomId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+                    const msg = new Paho.MQTT.Message(JSON.stringify(enriched));
+                    msg.destinationName = topic;
+                    msg.qos = 1;
+                    mqttClient.send(msg);
+                }
+            } catch (e) {}
+        }
+
+        // SINGLE-CLICK LOCAL FILE PICKER
+        localFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const objectUrl = URL.createObjectURL(file);
+                videoPlayer.srcObject = null;
+                videoPlayer.src = objectUrl;
+                videoPlayer.load();
+                emptyVideoPlaceholder.classList.add('hidden');
+                currentVideoTitle.textContent = file.name;
+
+                // If file is smaller than 40MB, send via P2P. If larger, advise live stream
+                if (isAuthenticated) {
+                    if (file.size > 60 * 1024 * 1024) {
+                        showSyncToast(`فیلم ${Math.round(file.size / (1024*1024))} مگابایت است. دکمه قرمز «پخش زنده فوری» را بزنید!`);
+                    }
+                    streamFileToPartner(file);
+                }
+            }
+        });
+
+        // Chat Form
+        chatForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const text = chatInput.value.trim();
+            if (!text || !isAuthenticated) return;
+
+            const timeStr = new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
+            renderChatMessage(currentUserName, text, true, timeStr);
+
+            sendPacket({
+                type: 'chat_message',
+                text: text,
+                time: timeStr
+            });
+
+            chatInput.value = '';
+            playMessageSound();
+        });
+
+        function renderChatMessage(sender, text, isMe, timeStr) {
+            const msgEl = document.createElement('div');
+            msgEl.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} transition-all`;
+
+            msgEl.innerHTML = `
+                <div class="flex items-center gap-1.5 mb-0.5 text-[9px] text-gray-400">
+                    <span class="font-bold ${isMe ? 'text-orange-400' : 'text-gray-300'}">${escapeHtml(sender)}</span>
+                    <span>${timeStr || ''}</span>
+                </div>
+                <div class="max-w-[85%] rounded-2xl px-3 py-1.5 text-xs leading-relaxed ${
+                    isMe 
+                    ? 'chat-bubble-me text-black font-semibold' 
+                    : 'chat-bubble-partner text-gray-200 border border-gray-800'
+                }">
+                    ${escapeHtml(text)}
+                </div>
+            `;
+
+            chatMessages.appendChild(msgEl);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Modals triggers
+        btnOpenShareModal?.addEventListener('click', () => {
+            updateShareLinks();
+            shareModal.classList.remove('hidden');
+        });
+        btnCloseShareModal?.addEventListener('click', () => shareModal.classList.add('hidden'));
+
+        btnOpenGuideModal?.addEventListener('click', () => guideModal.classList.remove('hidden'));
+        btnCloseGuideModal?.addEventListener('click', () => guideModal.classList.add('hidden'));
+
+        btnModalCopyLink?.addEventListener('click', () => {
+            const url = `${window.location.origin}${window.location.pathname}?room=${currentRoomId}`;
+            const temp = document.createElement('input');
+            document.body.appendChild(temp);
+            temp.value = url;
+            temp.select();
+            document.execCommand('copy');
+            document.body.removeChild(temp);
+            showSyncToast('لینک اتاق کپی شد');
+        });
+
+        function showSyncToast(text) {
+            syncToastText.textContent = text;
+            syncToast.classList.remove('opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+                syncToast.classList.add('opacity-0', 'pointer-events-none');
+            }, 3000);
+        }
+
+        function formatTime(seconds) {
+            if (isNaN(seconds)) return '00:00';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function escapeHtml(string) {
+            return String(string).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function playMessageSound() {
+            try {
+                if (!synth && typeof Tone !== 'undefined') {
+                    synth = new Tone.Synth({
+                        oscillator: { type: 'sine' },
+                        envelope: { attack: 0.005, decay: 0.1, sustain: 0, release: 0.1 }
+                    }).toDestination();
+                }
+                if (synth && Tone.context && Tone.context.state === 'running') {
+                    synth.triggerAttackRelease('E5', '0.05');
+                }
+            } catch(e){}
+        }
+
+        window.addEventListener('load', () => {
+            initRoomIdentity();
+        });
+    </script>
+</body>
+</html>
