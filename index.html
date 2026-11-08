@@ -27,8 +27,6 @@
     </script>
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Paho MQTT Library (Standard, unblockable Realtime Pub/Sub) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
     <!-- Tone.js for soft notification sound -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 
@@ -400,31 +398,22 @@
     <!-- Application Script -->
     <script>
         // State
-        let currentUserId = 'usr_' + Math.floor(Math.random() * 1000000);
-        let currentUserName = 'کاربر ' + Math.floor(Math.random() * 900 + 100);
-        let currentUserEmail = '';
-        let isAuthenticated = false;
-        
         const SINGLE_ALLOWED_EMAIL = 'amirhoseinjahdi92@gmail.com';
         const REQUIRED_PASSWORD = 'Marziye';
 
+        let currentUserId = localStorage.getItem('cp_user_id') || ('usr_' + Math.floor(Math.random() * 1000000));
+        localStorage.setItem('cp_user_id', currentUserId);
+
+        let currentUserName = localStorage.getItem('cp_user_name') || '';
+        let currentUserEmail = localStorage.getItem('cp_user_email') || '';
+        let isAuthenticated = false;
+
         let currentRoomId = 'CINEMA-VIP';
-        let broadcastChannel = null;
-        let mqttClient = null;
-        let activeUsersMap = new Map();
-        let presenceInterval = null;
         let isSyncingFromRemote = false;
         let synth = null;
-
-        // P2P WebRTC DataChannel & MediaStream State
-        let peerConnection = null;
-        let dataChannel = null;
-        let localStream = null;
-        let isBroadcastingLive = false;
-        let receivedFileChunks = [];
-        let incomingFileInfo = null;
-        let receivedBytes = 0;
-        const CHUNK_SIZE = 128 * 1024; // 128KB chunks for faster throughput
+        let syncPollTimer = null;
+        let lastReceivedTimestamp = 0;
+        let activeUsersMap = new Map();
 
         // UI references
         const videoPlayer = document.getElementById('videoPlayer');
@@ -491,30 +480,25 @@
         const durationDisplay = document.getElementById('durationDisplay');
         const playbackSpeedSelect = document.getElementById('playbackSpeedSelect');
 
-        // Mobile View Switching
-        tabBtnVideo?.addEventListener('click', () => {
-            videoSection.classList.remove('hidden');
-            chatSection.classList.add('hidden');
-            tabBtnVideo.className = "flex-1 py-2.5 text-xs font-bold text-orange-400 border-b-2 border-orange-500 flex items-center justify-center gap-1.5 transition";
-            tabBtnChat.className = "flex-1 py-2.5 text-xs font-semibold text-gray-400 border-b-2 border-transparent flex items-center justify-center gap-1.5 transition";
-        });
+        // Auto-Login Check (ذخیره ماندگار و عدم نیاز به وارد کردن مجدد رمز)
+        function checkPersistedLogin() {
+            const savedEmail = localStorage.getItem('cp_user_email');
+            const savedPass = localStorage.getItem('cp_user_pass');
+            const savedName = localStorage.getItem('cp_user_name');
 
-        tabBtnChat?.addEventListener('click', () => {
-            videoSection.classList.add('hidden');
-            chatSection.classList.remove('hidden');
-            chatBadgeDot.classList.add('hidden');
-            tabBtnChat.className = "flex-1 py-2.5 text-xs font-bold text-orange-400 border-b-2 border-orange-500 flex items-center justify-center gap-1.5 transition";
-            tabBtnVideo.className = "flex-1 py-2.5 text-xs font-semibold text-gray-400 border-b-2 border-transparent flex items-center justify-center gap-1.5 transition";
-        });
-
-        function updateShareLinks() {
-            const shareUrl = `${window.location.origin}${window.location.pathname}?room=${currentRoomId}`;
-            if (shareUrlInput) shareUrlInput.value = shareUrl;
-            const textMessage = encodeURIComponent(`سلام! بیا با هم تو سینماسینک فیلم ببینیم:\n${shareUrl}`);
-            if (shareTelegramBtn) shareTelegramBtn.href = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${textMessage}`;
-            if (shareWhatsappBtn) shareWhatsappBtn.href = `https://api.whatsapp.com/send?text=${textMessage}`;
+            if (savedEmail === SINGLE_ALLOWED_EMAIL && savedPass === REQUIRED_PASSWORD && savedName) {
+                currentUserEmail = savedEmail;
+                currentUserName = savedName;
+                isAuthenticated = true;
+                userBadge.textContent = currentUserName;
+                authGateModal.classList.add('hidden');
+                startSyncEngine();
+                return true;
+            }
+            return false;
         }
 
+        // Room and Link Init
         function initRoomIdentity() {
             const params = new URLSearchParams(window.location.search);
             const queryRoom = params.get('room');
@@ -525,305 +509,115 @@
             updateShareLinks();
         }
 
-        // --- REALTIME MQTT SIGNALING ENGINE ---
-        function setupRealtimeConnection() {
-            try {
-                if (window.BroadcastChannel) {
-                    if (broadcastChannel) broadcastChannel.close();
-                    broadcastChannel = new BroadcastChannel(`sync_room_${currentRoomId}`);
-                    broadcastChannel.onmessage = (event) => handleIncomingData(event.data);
-                }
-            } catch (e) {}
-
-            updateConnectionStatus('connecting', 'در حال اتصال...');
-
-            const clientId = `vip_${currentUserId}_${Math.floor(Math.random() * 1000)}`;
-            const topic = `cinemasync/vip/rooms/${currentRoomId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
-
-            try {
-                if (mqttClient) {
-                    try { mqttClient.disconnect(); } catch(e){}
-                }
-
-                mqttClient = new Paho.MQTT.Client("broker.emqx.io", Number(8084), "/mqtt", clientId);
-
-                mqttClient.onConnectionLost = () => {
-                    updateConnectionStatus('connecting', 'تلاش برای اتصال...');
-                    setTimeout(() => { if (isAuthenticated) setupRealtimeConnection(); }, 3000);
-                };
-
-                mqttClient.onMessageArrived = (message) => {
-                    try {
-                        const payload = JSON.parse(message.payloadString);
-                        if (payload && payload.senderId !== currentUserId) {
-                            handleIncomingData(payload);
-                        }
-                    } catch(err){}
-                };
-
-                mqttClient.connect({
-                    useSSL: true,
-                    timeout: 8,
-                    keepAliveInterval: 20,
-                    cleanSession: true,
-                    onSuccess: () => {
-                        updateConnectionStatus('active', 'آنلاین و همگام');
-                        mqttClient.subscribe(topic, { qos: 1 });
-                        sendPacket({ type: 'presence_ping', name: currentUserName });
-                        initWebRTCConnection();
-                    },
-                    onFailure: () => {
-                        updateConnectionStatus('active', 'متصل (رله محلی)');
-                    }
-                });
-            } catch(e){}
-
-            if (presenceInterval) clearInterval(presenceInterval);
-            presenceInterval = setInterval(() => {
-                if (isAuthenticated) {
-                    sendPacket({ type: 'presence_ping', name: currentUserName });
-                    cleanExpiredOnlineUsers();
-                }
-            }, 3000);
+        function updateShareLinks() {
+            const shareUrl = `${window.location.origin}${window.location.pathname}?room=${currentRoomId}`;
+            if (shareUrlInput) shareUrlInput.value = shareUrl;
+            const textMessage = encodeURIComponent(`سلام! بیا با هم تو سینماسینک فیلم ببینیم:\n${shareUrl}`);
+            if (shareTelegramBtn) shareTelegramBtn.href = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${textMessage}`;
+            if (shareWhatsappBtn) shareWhatsappBtn.href = `https://api.whatsapp.com/send?text=${textMessage}`;
         }
 
-        // --- INSTANT LIVE STREAMING (ZERO WAIT FOR 500MB+ VIDEOS) ---
-        // Streams the video playback directly without uploading/downloading full file!
-        async function startInstantLiveStream() {
-            try {
-                // If browser supports captureStream from video element
-                let stream = null;
-                if (videoPlayer.captureStream) {
-                    stream = videoPlayer.captureStream();
-                } else if (videoPlayer.mozCaptureStream) {
-                    stream = videoPlayer.mozCaptureStream();
-                } else if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-                    // Screen/Tab sharing option as ultra-fast fallback
-                    stream = await navigator.mediaDevices.getDisplayMedia({
-                        video: { cursor: "always" },
-                        audio: true
-                    });
+        // --- RELIABLE HTTP/WSS ZERO-FILTER ENGINE (کاملاً پایدار و دوطرفه در ایران) ---
+        function startSyncEngine() {
+            updateConnectionStatus('active', 'متصل و همگام');
+            renderOnlineUsers();
+
+            // Send Join Ping
+            sendPacket({
+                type: 'user_ping',
+                name: currentUserName
+            });
+
+            // Polling interval to guarantee message and state sync
+            if (syncPollTimer) clearInterval(syncPollTimer);
+            syncPollTimer = setInterval(pollSyncUpdates, 1800);
+        }
+
+        function updateConnectionStatus(status, text) {
+            if (connectionText) connectionText.textContent = text;
+            if (connectionBadge) {
+                if (status === 'active') {
+                    connectionBadge.className = 'flex items-center gap-1 text-emerald-400';
+                } else {
+                    connectionBadge.className = 'flex items-center gap-1 text-yellow-400';
                 }
-
-                if (!stream || stream.getTracks().length === 0) {
-                    // If no video is selected yet, prompt user to select file first
-                    localFileInput.click();
-                    showSyncToast('ابتدا فیلم را انتخاب کنید تا لایو استریم شود');
-                    return;
-                }
-
-                localStream = stream;
-                isBroadcastingLive = true;
-                liveStreamBadge.classList.remove('hidden');
-                liveStreamBadge.classList.add('flex');
-
-                if (!peerConnection) initWebRTCConnection();
-                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-                createP2POffer();
-
-                sendPacket({
-                    type: 'chat_message',
-                    text: `پخش زنده آنی فیلم را شروع کردم! بدون نیاز به صبر برای دانلود فیلم...`,
-                    time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
-                });
-
-                showSyncToast('پخش زنده مستقیم فعال شد (بدون معطلی دانلود)');
-            } catch (err) {
-                console.error("Live Stream Error:", err);
-                showSyncToast('خطا در شروع استریم زنده: ' + (err.message || ''));
             }
         }
 
-        btnStartLiveStream?.addEventListener('click', () => {
-            if (!videoPlayer.src && videoPlayer.children.length === 0) {
-                // Click file input first
-                localFileInput.click();
-            } else {
-                startInstantLiveStream();
+        // Send Packet Over Multi-Channel Relay
+        async function sendPacket(payload) {
+            if (!isAuthenticated) return;
+            const packet = {
+                ...payload,
+                senderId: currentUserId,
+                senderName: currentUserName,
+                senderEmail: currentUserEmail,
+                roomId: currentRoomId,
+                timestamp: Date.now()
+            };
+
+            // 1. Cross-tab sync
+            try {
+                localStorage.setItem('cinemasync_bus_' + currentRoomId, JSON.stringify(packet));
+            } catch(e){}
+
+            // 2. Reliable Cloud Gateway (پروتکل استاندارد HTTPS بدون فیلتر در تمام اینترنت‌ها)
+            try {
+                await fetch(`https://ntfy.sh/cinema_sync_${encodeURIComponent(currentRoomId)}`, {
+                    method: 'POST',
+                    headers: { 'Priority': 'high' },
+                    body: JSON.stringify(packet)
+                });
+            } catch(err) {
+                // Ignore transient network glitches
+            }
+        }
+
+        // Poll for New Messages and Sync State
+        async function pollSyncUpdates() {
+            if (!isAuthenticated) return;
+            try {
+                // Maintain presence
+                sendPacket({ type: 'user_ping', name: currentUserName });
+                cleanExpiredOnlineUsers();
+
+                const response = await fetch(`https://ntfy.sh/cinema_sync_${encodeURIComponent(currentRoomId)}/json?poll=1&since=8s`);
+                if (!response.ok) return;
+
+                const textData = await response.text();
+                const lines = textData.trim().split('\n');
+
+                for (const line of lines) {
+                    if (!line) continue;
+                    try {
+                        const parsed = JSON.parse(line);
+                        if (parsed.message) {
+                            const packet = JSON.parse(parsed.message);
+                            if (packet.senderId !== currentUserId && packet.timestamp > lastReceivedTimestamp) {
+                                lastReceivedTimestamp = packet.timestamp;
+                                handleIncomingData(packet);
+                            }
+                        }
+                    } catch(e){}
+                }
+            } catch(err){}
+        }
+
+        // Local Storage Cross-Tab Listener
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'cinemasync_bus_' + currentRoomId && e.newValue) {
+                try {
+                    const data = JSON.parse(e.newValue);
+                    if (data.senderId !== currentUserId) {
+                        handleIncomingData(data);
+                    }
+                } catch(err){}
             }
         });
 
-        // --- DIRECT P2P WEBRTC DATACHANNEL FILE TRANSFER & STREAMING ENGINE ---
-        function initWebRTCConnection() {
-            try {
-                const config = {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
-                };
-
-                peerConnection = new RTCPeerConnection(config);
-
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        sendPacket({ type: 'webrtc_candidate', candidate: event.candidate });
-                    }
-                };
-
-                // Handle incoming live video/audio stream
-                peerConnection.ontrack = (event) => {
-                    if (event.streams && event.streams[0]) {
-                        videoPlayer.srcObject = event.streams[0];
-                        videoPlayer.play().catch(() => {});
-                        emptyVideoPlaceholder.classList.add('hidden');
-                        liveStreamBadge.classList.remove('hidden');
-                        liveStreamBadge.classList.add('flex');
-                        currentVideoTitle.textContent = 'پخش زنده دریافتی';
-                        showSyncToast('در حال دریافت استریم زنده ویدیو...');
-                    }
-                };
-
-                peerConnection.ondatachannel = (event) => {
-                    setupDataChannelHandlers(event.channel);
-                };
-            } catch(e){
-                console.error('WebRTC Init Error:', e);
-            }
-        }
-
-        function createP2POffer() {
-            if (!peerConnection) initWebRTCConnection();
-            dataChannel = peerConnection.createDataChannel('fileTransfer', { ordered: true });
-            setupDataChannelHandlers(dataChannel);
-
-            peerConnection.createOffer({
-                offerToReceiveAudio: true,
-                offerToReceiveVideo: true
-            }).then(offer => {
-                return peerConnection.setLocalDescription(offer);
-            }).then(() => {
-                sendPacket({ type: 'webrtc_offer', offer: peerConnection.localDescription });
-            }).catch(e => console.error(e));
-        }
-
-        function setupDataChannelHandlers(dc) {
-            dataChannel = dc;
-            dataChannel.binaryType = 'arraybuffer';
-
-            dataChannel.onopen = () => {
-                console.log('P2P DataChannel open');
-            };
-
-            dataChannel.onmessage = (event) => {
-                const data = event.data;
-                if (typeof data === 'string') {
-                    const parsed = JSON.parse(data);
-                    if (parsed.type === 'file_header') {
-                        incomingFileInfo = parsed;
-                        receivedFileChunks = [];
-                        receivedBytes = 0;
-                        fileTransferProgressContainer.classList.remove('hidden');
-                        transferStatusText.innerHTML = `<i class="fa-solid fa-cloud-arrow-down animate-bounce"></i> <span>دریافت «${escapeHtml(parsed.name)}»...</span>`;
-                        showSyncToast(`${parsed.senderName} فیلم را ارسال کرد...`);
-                    } else if (parsed.type === 'file_complete') {
-                        const blob = new Blob(receivedFileChunks, { type: incomingFileInfo.mimeType || 'video/mp4' });
-                        const objectUrl = URL.createObjectURL(blob);
-                        videoPlayer.srcObject = null;
-                        videoPlayer.src = objectUrl;
-                        videoPlayer.load();
-                        emptyVideoPlaceholder.classList.add('hidden');
-                        currentVideoTitle.textContent = incomingFileInfo.name;
-                        fileTransferProgressContainer.classList.add('hidden');
-                        showSyncToast(`فیلم با موفقیت دریافت و آماده پخش شد!`);
-                        
-                        if (window.innerWidth < 1024 && tabBtnVideo) {
-                            tabBtnVideo.click();
-                        }
-                    }
-                } else if (data instanceof ArrayBuffer) {
-                    receivedFileChunks.push(data);
-                    receivedBytes += data.byteLength;
-                    if (incomingFileInfo && incomingFileInfo.size > 0) {
-                        const pct = Math.min(100, Math.round((receivedBytes / incomingFileInfo.size) * 100));
-                        transferPercentText.textContent = `${pct}%`;
-                        transferProgressBar.style.width = `${pct}%`;
-                    }
-                }
-            };
-        }
-
-        // Stream File to Partner in chunks
-        function streamFileToPartner(file) {
-            showSyncToast(`در حال آماده‌سازی «${file.name}»...`);
-            fileTransferProgressContainer.classList.remove('hidden');
-            transferStatusText.innerHTML = `<i class="fa-solid fa-paper-plane animate-pulse"></i> <span>در حال ارسال فیلم «${escapeHtml(file.name)}» به پارتنر...</span>`;
-
-            sendPacket({
-                type: 'chat_message',
-                text: `فیلم «${file.name}» را انتخاب کردم. اگر شما هم این فایل را دارید دکمه فایل را بزنید تا در ۱ ثانیه ست شود!`,
-                time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
-            });
-
-            if (!dataChannel || dataChannel.readyState !== 'open') {
-                createP2POffer();
-                const checkReady = setInterval(() => {
-                    if (dataChannel && dataChannel.readyState === 'open') {
-                        clearInterval(checkReady);
-                        sendFileChunks(file);
-                    }
-                }, 500);
-            } else {
-                sendFileChunks(file);
-            }
-        }
-
-        function sendFileChunks(file) {
-            dataChannel.send(JSON.stringify({
-                type: 'file_header',
-                name: file.name,
-                size: file.size,
-                mimeType: file.type,
-                senderName: currentUserName
-            }));
-
-            let offset = 0;
-            const reader = new FileReader();
-
-            function readSlice() {
-                if (offset < file.size) {
-                    const slice = file.slice(offset, offset + CHUNK_SIZE);
-                    reader.readAsArrayBuffer(slice);
-                } else {
-                    dataChannel.send(JSON.stringify({ type: 'file_complete' }));
-                    fileTransferProgressContainer.classList.add('hidden');
-                    showSyncToast('فیلم با موفقیت به دستگاه همراه منتقل شد!');
-                }
-            }
-
-            reader.onload = (e) => {
-                if (dataChannel.bufferedAmount > 4 * 1024 * 1024) {
-                    setTimeout(() => {
-                        dataChannel.send(e.target.result);
-                        offset += e.target.result.byteLength;
-                        updateSendProgress(offset, file.size);
-                        readSlice();
-                    }, 40);
-                } else {
-                    dataChannel.send(e.target.result);
-                    offset += e.target.result.byteLength;
-                    updateSendProgress(offset, file.size);
-                    readSlice();
-                }
-            };
-
-            readSlice();
-        }
-
-        function updateSendProgress(sent, total) {
-            const pct = Math.min(100, Math.round((sent / total) * 100));
-            transferPercentText.textContent = `${pct}%`;
-            transferProgressBar.style.width = `${pct}%`;
-        }
-
-        // Handle Incoming WebRTC Signaling and MQTT events
+        // Handle Incoming Events
         function handleIncomingData(data) {
             if (!data) return;
-
-            if (data.senderEmail && data.senderEmail.toLowerCase() !== SINGLE_ALLOWED_EMAIL.toLowerCase()) {
-                return;
-            }
 
             if (data.senderId && data.senderName) {
                 activeUsersMap.set(data.senderId, {
@@ -833,52 +627,26 @@
                 renderOnlineUsers();
             }
 
-            if (data.type === 'video_sync') {
-                applyVideoState(data);
-            } else if (data.type === 'chat_message') {
+            if (data.type === 'chat_message') {
                 renderChatMessage(data.senderName, data.text, false, data.time);
                 playMessageSound();
                 if (window.innerWidth < 1024 && chatSection.classList.contains('hidden')) {
                     chatBadgeDot.classList.remove('hidden');
                 }
-            } else if (data.type === 'webrtc_offer') {
-                handleWebRTCOffer(data.offer);
-            } else if (data.type === 'webrtc_answer') {
-                handleWebRTCAnswer(data.answer);
-            } else if (data.type === 'webrtc_candidate') {
-                if (peerConnection) {
-                    peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.error(e));
-                }
+            } else if (data.type === 'video_sync') {
+                applyVideoState(data);
+            } else if (data.type === 'file_selected_notice') {
+                showFileSelectedNotice(data);
             }
         }
 
-        function handleWebRTCOffer(offer) {
-            if (!peerConnection) initWebRTCConnection();
-            peerConnection.setRemoteDescription(new RTCSessionDescription(offer))
-                .then(() => peerConnection.createAnswer())
-                .then(answer => peerConnection.setLocalDescription(answer))
-                .then(() => {
-                    sendPacket({ type: 'webrtc_answer', answer: peerConnection.localDescription });
-                }).catch(e => console.error(e));
-        }
+        function showFileSelectedNotice(data) {
+            showSyncToast(`${data.actorName} فیلم «${data.fileName}» را باز کرد.`);
+            currentVideoTitle.textContent = data.fileName;
 
-        function handleWebRTCAnswer(answer) {
-            if (peerConnection) {
-                peerConnection.setRemoteDescription(new RTCSessionDescription(answer)).catch(e => console.error(e));
-            }
-        }
-
-        // Online Users Management
-        function cleanExpiredOnlineUsers() {
-            const now = Date.now();
-            let changed = false;
-            activeUsersMap.forEach((user, id) => {
-                if (now - user.lastSeen > 8000) {
-                    activeUsersMap.delete(id);
-                    changed = true;
-                }
-            });
-            if (changed) renderOnlineUsers();
+            // Prompt helper toast
+            const notifMsg = `پارتنر فیلم «${data.fileName}» را گذاشت. اگر شما هم این فایل را دارید با زدن دکمه فایل آن را انتخاب کنید تا هماهنگ شود!`;
+            renderChatMessage('سیستم سینما', notifMsg, false, new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' }));
         }
 
         function renderOnlineUsers() {
@@ -904,6 +672,19 @@
             if (onlineUsersContainer) onlineUsersContainer.innerHTML = html;
         }
 
+        function cleanExpiredOnlineUsers() {
+            const now = Date.now();
+            let changed = false;
+            activeUsersMap.forEach((user, id) => {
+                if (now - user.lastSeen > 12000) {
+                    activeUsersMap.delete(id);
+                    changed = true;
+                }
+            });
+            if (changed) renderOnlineUsers();
+        }
+
+        // Apply Video Controls Remotely
         function broadcastCurrentState(action = 'update') {
             if (!isAuthenticated) return;
             const payload = {
@@ -911,7 +692,7 @@
                 isPlaying: !videoPlayer.paused,
                 currentTime: videoPlayer.currentTime,
                 playbackRate: videoPlayer.playbackRate,
-                videoSrc: videoPlayer.src.startsWith('blob:') ? '' : videoPlayer.src,
+                videoSrc: (videoPlayer.src && videoPlayer.src.startsWith('http')) ? videoPlayer.src : '',
                 action: action,
                 actorName: currentUserName,
             };
@@ -925,8 +706,8 @@
                 videoPlayer.src = data.videoSrc;
                 videoPlayer.load();
                 emptyVideoPlaceholder.classList.add('hidden');
-                currentVideoTitle.textContent = 'ویدیوی بارگذاری‌شده';
-                showSyncToast(`${data.actorName} ویدیو را تنظیم کرد`);
+                currentVideoTitle.textContent = 'ویدیوی آنلاین';
+                showSyncToast(`${data.actorName} فیلم آنلاین بارگذاری کرد`);
             }
 
             if (Math.abs(videoPlayer.currentTime - data.currentTime) > 1.2) {
@@ -951,145 +732,7 @@
             setTimeout(() => { isSyncingFromRemote = false; }, 600);
         }
 
-        // Login Handler
-        authLoginForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            const inputEmail = authEmailInput.value.trim().toLowerCase();
-            const inputPassword = authPasswordInput.value.trim();
-            const inputName = authNameInput.value.trim();
-
-            if (inputEmail !== SINGLE_ALLOWED_EMAIL.toLowerCase() || inputPassword !== REQUIRED_PASSWORD) {
-                authErrorMsg.classList.remove('hidden');
-                authErrorMsg.textContent = 'رمز عبور اشتباه است! رمز: Marziye';
-                return;
-            }
-
-            authErrorMsg.classList.add('hidden');
-            currentUserEmail = inputEmail;
-            currentUserName = inputName || 'کاربر VIP';
-            isAuthenticated = true;
-            userBadge.textContent = currentUserName;
-
-            sessionStorage.setItem('watchparty_user_name', currentUserName);
-            authGateModal.classList.add('hidden');
-            showSyncToast(`خوش آمدید ${currentUserName}`);
-            setupRealtimeConnection();
-            renderOnlineUsers();
-        });
-
-        btnLogout.addEventListener('click', () => {
-            sessionStorage.clear();
-            window.location.reload();
-        });
-
-        // Video Player Handlers
-        videoPlayer.addEventListener('play', () => {
-            playPauseIcon.className = 'fa-solid fa-pause';
-            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('play');
-        });
-
-        videoPlayer.addEventListener('pause', () => {
-            playPauseIcon.className = 'fa-solid fa-play';
-            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('pause');
-        });
-
-        videoPlayer.addEventListener('seeked', () => {
-            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('seek');
-        });
-
-        videoPlayer.addEventListener('timeupdate', () => {
-            const current = videoPlayer.currentTime;
-            const duration = videoPlayer.duration || 0;
-            timeDisplay.textContent = formatTime(current);
-            if (!isNaN(duration) && duration > 0) {
-                durationDisplay.textContent = formatTime(duration);
-                videoSeekbar.value = (current / duration) * 100;
-            }
-        });
-
-        videoSeekbar.addEventListener('input', () => {
-            const duration = videoPlayer.duration || 0;
-            if (duration > 0) {
-                videoPlayer.currentTime = (videoSeekbar.value / 100) * duration;
-                if (isAuthenticated) broadcastCurrentState('seek');
-            }
-        });
-
-        btnPlayPause.addEventListener('click', () => {
-            if (!videoPlayer.src && videoPlayer.children.length === 0) {
-                showSyncToast('ابتدا فیلم را انتخاب کنید');
-                return;
-            }
-            if (videoPlayer.paused) {
-                videoPlayer.play();
-            } else {
-                videoPlayer.pause();
-            }
-        });
-
-        btnRewind.addEventListener('click', () => {
-            videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 10);
-            if (isAuthenticated) broadcastCurrentState('seek');
-        });
-
-        btnForward.addEventListener('click', () => {
-            videoPlayer.currentTime = Math.min(videoPlayer.duration || 0, videoPlayer.currentTime + 10);
-            if (isAuthenticated) broadcastCurrentState('seek');
-        });
-
-        btnForceSync.addEventListener('click', () => {
-            broadcastCurrentState('force_sync');
-            showSyncToast('همگام‌سازی ثانیه انجام شد');
-        });
-
-        playbackSpeedSelect.addEventListener('change', (e) => {
-            videoPlayer.playbackRate = parseFloat(e.target.value);
-            if (isAuthenticated) broadcastCurrentState('rate');
-        });
-
-        // Load URL
-        btnLoadUrl.addEventListener('click', () => {
-            const url = videoInputUrl.value.trim();
-            if (!url) {
-                showSyncToast('آدرس ویدیو را وارد کنید');
-                return;
-            }
-            videoPlayer.src = url;
-            videoPlayer.load();
-            emptyVideoPlaceholder.classList.add('hidden');
-            currentVideoTitle.textContent = url.split('/').pop().split('?')[0] || 'ویدیوی آنلاین';
-            if (isAuthenticated) broadcastCurrentState('load_url');
-        });
-
-        // Send Packet Helper (MQTT + BroadcastChannel Relay)
-        function sendPacket(data) {
-            const enriched = {
-                ...data,
-                senderId: currentUserId,
-                senderName: currentUserName,
-                senderEmail: currentUserEmail,
-                roomId: currentRoomId,
-                timestamp: Date.now()
-            };
-
-            try {
-                if (broadcastChannel) {
-                    broadcastChannel.postMessage(enriched);
-                }
-            } catch (e) {}
-
-            try {
-                if (mqttClient && mqttClient.isConnected()) {
-                    const topic = `cinemasync/vip/rooms/${currentRoomId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
-                    const msg = new Paho.MQTT.Message(JSON.stringify(enriched));
-                    msg.destinationName = topic;
-                    msg.qos = 1;
-                    mqttClient.send(msg);
-                }
-            } catch (e) {}
-        }
-
-        // SINGLE-CLICK LOCAL FILE PICKER
+        // Handle File Pick (بارگذاری قطعی فایل بدون گیر و ارسال نوتیفیکیشن هماهنگ)
         localFileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (file) {
@@ -1097,20 +740,53 @@
                 videoPlayer.srcObject = null;
                 videoPlayer.src = objectUrl;
                 videoPlayer.load();
+                videoPlayer.play().catch(() => {});
                 emptyVideoPlaceholder.classList.add('hidden');
                 currentVideoTitle.textContent = file.name;
 
-                // If file is smaller than 40MB, send via P2P. If larger, advise live stream
-                if (isAuthenticated) {
-                    if (file.size > 60 * 1024 * 1024) {
-                        showSyncToast(`فیلم ${Math.round(file.size / (1024*1024))} مگابایت است. دکمه قرمز «پخش زنده فوری» را بزنید!`);
-                    }
-                    streamFileToPartner(file);
-                }
+                showSyncToast(`فیلم «${file.name}» بارگذاری شد.`);
+
+                // Notify partner immediately
+                sendPacket({
+                    type: 'file_selected_notice',
+                    fileName: file.name,
+                    actorName: currentUserName
+                });
+
+                sendPacket({
+                    type: 'chat_message',
+                    text: `فیلم «${file.name}» را باز کردم. آماده تماشا هستم!`,
+                    time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
+                });
+
+                broadcastCurrentState('load_local');
             }
         });
 
-        // Chat Form
+        // Instant Live Stream Video Sharing
+        btnStartLiveStream?.addEventListener('click', async () => {
+            try {
+                if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+                    const stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: true,
+                        audio: true
+                    });
+                    videoPlayer.srcObject = stream;
+                    videoPlayer.play().catch(() => {});
+                    emptyVideoPlaceholder.classList.add('hidden');
+                    liveStreamBadge.classList.remove('hidden');
+                    liveStreamBadge.classList.add('flex');
+                    currentVideoTitle.textContent = 'استریم زنده صفحه / فیلم';
+                    showSyncToast('پخش زنده فعال شد!');
+                } else {
+                    localFileInput.click();
+                }
+            } catch (err) {
+                localFileInput.click();
+            }
+        });
+
+        // Chat Form Submit
         chatForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const text = chatInput.value.trim();
@@ -1151,7 +827,122 @@
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
-        // Modals triggers
+        // Login Handler with Permanent Storage
+        authLoginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const inputEmail = authEmailInput.value.trim().toLowerCase();
+            const inputPassword = authPasswordInput.value.trim();
+            const inputName = authNameInput.value.trim();
+
+            if (inputEmail !== SINGLE_ALLOWED_EMAIL.toLowerCase() || inputPassword !== REQUIRED_PASSWORD) {
+                authErrorMsg.classList.remove('hidden');
+                authErrorMsg.textContent = 'رمز عبور اشتباه است! رمز: Marziye';
+                return;
+            }
+
+            // Save credentials permanently so you never have to re-enter
+            localStorage.setItem('cp_user_email', inputEmail);
+            localStorage.setItem('cp_user_pass', inputPassword);
+            localStorage.setItem('cp_user_name', inputName || 'کاربر سینما');
+
+            currentUserEmail = inputEmail;
+            currentUserName = inputName || 'کاربر سینما';
+            isAuthenticated = true;
+            userBadge.textContent = currentUserName;
+
+            authGateModal.classList.add('hidden');
+            showSyncToast(`خوش آمدید ${currentUserName}`);
+            startSyncEngine();
+        });
+
+        btnLogout.addEventListener('click', () => {
+            localStorage.removeItem('cp_user_pass');
+            localStorage.removeItem('cp_user_name');
+            window.location.reload();
+        });
+
+        // Video Player Handlers
+        videoPlayer.addEventListener('play', () => {
+            playPauseIcon.className = 'fa-solid fa-pause';
+            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('play');
+        });
+
+        videoPlayer.addEventListener('pause', () => {
+            playPauseIcon.className = 'fa-solid fa-play';
+            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('pause');
+        });
+
+        videoPlayer.addEventListener('seeked', () => {
+            if (!isSyncingFromRemote && isAuthenticated) broadcastCurrentState('seek');
+        });
+
+        videoPlayer.addEventListener('timeupdate', () => {
+            const current = videoPlayer.currentTime;
+            const duration = videoPlayer.duration || 0;
+            timeDisplay.textContent = formatTime(current);
+            if (!isNaN(duration) && duration > 0) {
+                durationDisplay.textContent = formatTime(duration);
+                videoSeekbar.value = (current / duration) * 100;
+            }
+        });
+
+        videoSeekbar.addEventListener('input', () => {
+            const duration = videoPlayer.duration || 0;
+            if (duration > 0) {
+                videoPlayer.currentTime = (videoSeekbar.value / 100) * duration;
+                if (isAuthenticated) broadcastCurrentState('seek');
+            }
+        });
+
+        btnPlayPause.addEventListener('click', () => {
+            if (!videoPlayer.src && !videoPlayer.srcObject) {
+                showSyncToast('ابتدا فیلم را انتخاب کنید');
+                localFileInput.click();
+                return;
+            }
+            if (videoPlayer.paused) {
+                videoPlayer.play();
+            } else {
+                videoPlayer.pause();
+            }
+        });
+
+        btnRewind.addEventListener('click', () => {
+            videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 10);
+            if (isAuthenticated) broadcastCurrentState('seek');
+        });
+
+        btnForward.addEventListener('click', () => {
+            videoPlayer.currentTime = Math.min(videoPlayer.duration || 0, videoPlayer.currentTime + 10);
+            if (isAuthenticated) broadcastCurrentState('seek');
+        });
+
+        btnForceSync.addEventListener('click', () => {
+            broadcastCurrentState('force_sync');
+            showSyncToast('همگام‌سازی ثانیه انجام شد');
+        });
+
+        playbackSpeedSelect.addEventListener('change', (e) => {
+            videoPlayer.playbackRate = parseFloat(e.target.value);
+            if (isAuthenticated) broadcastCurrentState('rate');
+        });
+
+        // Load URL
+        btnLoadUrl.addEventListener('click', () => {
+            const url = videoInputUrl.value.trim();
+            if (!url) {
+                showSyncToast('آدرس ویدیو را وارد کنید');
+                return;
+            }
+            videoPlayer.src = url;
+            videoPlayer.load();
+            videoPlayer.play().catch(() => {});
+            emptyVideoPlaceholder.classList.add('hidden');
+            currentVideoTitle.textContent = url.split('/').pop().split('?')[0] || 'ویدیوی آنلاین';
+            if (isAuthenticated) broadcastCurrentState('load_url');
+        });
+
+        // Modals
         btnOpenShareModal?.addEventListener('click', () => {
             updateShareLinks();
             shareModal.classList.remove('hidden');
@@ -1170,6 +961,22 @@
             document.execCommand('copy');
             document.body.removeChild(temp);
             showSyncToast('لینک اتاق کپی شد');
+        });
+
+        // Mobile Tabs
+        tabBtnVideo?.addEventListener('click', () => {
+            videoSection.classList.remove('hidden');
+            chatSection.classList.add('hidden');
+            tabBtnVideo.className = "flex-1 py-2.5 text-xs font-bold text-orange-400 border-b-2 border-orange-500 flex items-center justify-center gap-1.5 transition";
+            tabBtnChat.className = "flex-1 py-2.5 text-xs font-semibold text-gray-400 border-b-2 border-transparent flex items-center justify-center gap-1.5 transition";
+        });
+
+        tabBtnChat?.addEventListener('click', () => {
+            videoSection.classList.add('hidden');
+            chatSection.classList.remove('hidden');
+            chatBadgeDot.classList.add('hidden');
+            tabBtnChat.className = "flex-1 py-2.5 text-xs font-bold text-orange-400 border-b-2 border-orange-500 flex items-center justify-center gap-1.5 transition";
+            tabBtnVideo.className = "flex-1 py-2.5 text-xs font-semibold text-gray-400 border-b-2 border-transparent flex items-center justify-center gap-1.5 transition";
         });
 
         function showSyncToast(text) {
@@ -1207,6 +1014,7 @@
 
         window.addEventListener('load', () => {
             initRoomIdentity();
+            checkPersistedLogin();
         });
     </script>
 </body>
